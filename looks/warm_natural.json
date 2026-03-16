@@ -1,0 +1,19 @@
+{
+  "name": "warm_natural",
+  "display_name": "Warm Natural",
+  "description": "Golden warmth with rich midtones. Warm shadows, vibrant but not oversaturated. Great for lifestyle and outdoor.",
+  "target_luminance": 0.45,
+  "contrast": 1.0,
+  "shadow_lift": 0.0,
+  "highlight_compression": 0.0,
+  "target_temp": 5200,
+  "tint_shift": 0.0,
+  "saturation_multiplier": 1.08,
+  "vibrance": 0.0,
+  "shadow_tint": [0.0, 0.0, 0.0],
+  "highlight_tint": [0.0, 0.0, 0.0],
+  "midtone_tint": [0.0, 0.0, 0.0],
+  "slope_adjust": [1.08, 1.00, 0.88],
+  "offset_adjust": [-0.010, -0.012, -0.018],
+  "power_adjust": [1.05, 1.10, 1.20]
+}

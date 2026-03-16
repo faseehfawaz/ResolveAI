@@ -1,0 +1,19 @@
+{
+  "name": "cinematic",
+  "display_name": "Cinematic / Film",
+  "description": "Rich cinematic look. Orange-teal inspired, deep crushed shadows, warm highlights, film-like desaturation.",
+  "target_luminance": 0.42,
+  "contrast": 1.0,
+  "shadow_lift": 0.0,
+  "highlight_compression": 0.0,
+  "target_temp": 5600,
+  "tint_shift": 0.0,
+  "saturation_multiplier": 0.80,
+  "vibrance": 0.0,
+  "shadow_tint": [0.0, 0.0, 0.0],
+  "highlight_tint": [0.0, 0.0, 0.0],
+  "midtone_tint": [0.0, 0.0, 0.0],
+  "slope_adjust": [1.06, 0.97, 0.88],
+  "offset_adjust": [-0.020, -0.018, -0.012],
+  "power_adjust": [1.10, 1.18, 1.25]
+}

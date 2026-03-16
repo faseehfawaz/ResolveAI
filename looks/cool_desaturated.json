@@ -1,0 +1,19 @@
+{
+  "name": "cool_desaturated",
+  "display_name": "Cool Desaturated / Editorial",
+  "description": "Moody, dramatic look with heavy contrast. Cool blue shadows, crushed blacks, editorial feel.",
+  "target_luminance": 0.40,
+  "contrast": 1.0,
+  "shadow_lift": 0.0,
+  "highlight_compression": 0.0,
+  "target_temp": 7200,
+  "tint_shift": 0.0,
+  "saturation_multiplier": 0.70,
+  "vibrance": 0.0,
+  "shadow_tint": [0.0, 0.0, 0.0],
+  "highlight_tint": [0.0, 0.0, 0.0],
+  "midtone_tint": [0.0, 0.0, 0.0],
+  "slope_adjust": [0.90, 0.96, 1.08],
+  "offset_adjust": [-0.020, -0.016, -0.008],
+  "power_adjust": [1.25, 1.20, 1.10]
+}

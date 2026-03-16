@@ -1,0 +1,19 @@
+{
+  "name": "corporate",
+  "display_name": "Corporate / Professional",
+  "description": "Clean, punchy corporate look. Deep blacks, neutral-cool tone, controlled highlights.",
+  "target_luminance": 0.45,
+  "contrast": 1.0,
+  "shadow_lift": 0.0,
+  "highlight_compression": 0.0,
+  "target_temp": 6200,
+  "tint_shift": 0.0,
+  "saturation_multiplier": 0.88,
+  "vibrance": 0.0,
+  "shadow_tint": [0.0, 0.0, 0.0],
+  "highlight_tint": [0.0, 0.0, 0.0],
+  "midtone_tint": [0.0, 0.0, 0.0],
+  "slope_adjust": [0.95, 0.98, 1.04],
+  "offset_adjust": [-0.015, -0.013, -0.010],
+  "power_adjust": [1.18, 1.15, 1.12]
+}

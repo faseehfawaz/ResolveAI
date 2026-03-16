@@ -1,0 +1,30 @@
+# Python
+__pycache__/
+*.py[cod]
+*$py.class
+*.so
+
+# Virtual env
+.venv/
+venv/
+ENV/
+
+# IDE
+.vscode/
+.idea/
+*.swp
+*.swo
+*~
+.DS_Store
+
+# Generated files
+luts/*.cube
+*.egg-info/
+dist/
+build/
+
+# Test / diagnostic scripts (keep in repo but ignore outputs)
+*.log
+
+# Gemini agent artifacts
+.gemini/

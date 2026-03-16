@@ -1,0 +1,1 @@
+"""ResolveAI – Plugin UI Components"""
