@@ -203,8 +203,14 @@ class AutoGrader:
                 grades.append(None)
                 continue
 
-            # Compute adaptive CDL for this clip
-            cdl = self._compute_adaptive_cdl(profile)
+            # Choose CDL computation based on mode
+            if self.drx_path:
+                # DRX mode: only normalization (exposure + WB matching)
+                # The DRX template handles all creative grading
+                cdl = self._compute_normalization_cdl(profile)
+            else:
+                # CDL-only mode: full adaptive CDL (normalization + creative)
+                cdl = self._compute_adaptive_cdl(profile)
 
             # Format for Resolve
             resolve_cdl = format_cdl_for_resolve(cdl)
@@ -324,6 +330,83 @@ class AutoGrader:
         baseline.luminance_range = (min(lums), max(lums))
 
         return baseline
+
+    def _compute_normalization_cdl(self, profile: ClipColorProfile) -> Dict:
+        """
+        Compute NORMALIZATION-ONLY CDL for DRX mode.
+
+        When a DRX template provides the creative grade (curves, color wheels,
+        contrast), the CDL should ONLY handle per-clip differences:
+
+        1. EXPOSURE MATCHING: Bring each clip's brightness to the baseline
+           via slope (highlights/gain) — more aggressive than creative mode
+        2. WHITE BALANCE MATCHING: Correct per-channel color casts via slope
+           at full strength (no dampening)
+        3. SHADOW LIFT: Compensate for clips that are too dark/bright
+           relative to what the DRX was designed for
+
+        No contrast, no split-tone, no creative black point — the DRX
+        handles all of that.
+        """
+        bl = self.baseline
+        eps = 1e-6
+
+        # ── 1. EXPOSURE + WHITE BALANCE via SLOPE ─────────────
+        # Full-strength correction: match each channel to baseline
+        r_ratio = bl.median_r_mean / max(profile.red.mean, eps)
+        g_ratio = bl.median_g_mean / max(profile.green.mean, eps)
+        b_ratio = bl.median_b_mean / max(profile.blue.mean, eps)
+
+        # Apply at 80% strength (strong but not full to avoid artifacts)
+        strength = 0.8
+        r_slope = 1.0 + (r_ratio - 1.0) * strength
+        g_slope = 1.0 + (g_ratio - 1.0) * strength
+        b_slope = 1.0 + (b_ratio - 1.0) * strength
+
+        # Wider clamp for normalization (allows bigger corrections)
+        r_slope = max(0.70, min(1.40, r_slope))
+        g_slope = max(0.70, min(1.40, g_slope))
+        b_slope = max(0.70, min(1.40, b_slope))
+
+        # ── 2. EXPOSURE FINE-TUNE via OFFSET ──────────────────
+        # If a clip is significantly brighter/darker than baseline,
+        # use offset to push shadows up or down
+        lum_diff = profile.luminance_mean - bl.median_luminance
+
+        if abs(lum_diff) > 0.03:  # Only correct meaningful differences
+            # Negative lum_diff = clip is darker → positive offset lifts shadows
+            # Scale aggressively: 0.1 lum difference → 0.02 offset
+            offset_correction = -lum_diff * 0.2
+            offset_correction = max(-0.04, min(0.04, offset_correction))
+        else:
+            offset_correction = 0.0
+
+        r_offset = offset_correction
+        g_offset = offset_correction
+        b_offset = offset_correction
+
+        # ── 3. POWER = 1.0 (no contrast adjustment) ──────────
+        # The DRX template handles all contrast via its curves.
+        # We keep power at identity.
+        r_power = 1.0
+        g_power = 1.0
+        b_power = 1.0
+
+        # ── 4. SATURATION ─────────────────────────────────────
+        # Match saturation to baseline if significantly different
+        sat_ratio = bl.median_saturation / max(profile.saturation_mean, eps)
+        if abs(sat_ratio - 1.0) > 0.2:  # Only correct if >20% off
+            saturation = 1.0 + (sat_ratio - 1.0) * 0.5  # 50% correction
+            saturation = max(0.7, min(1.3, saturation))
+        else:
+            saturation = 1.0  # Leave saturation to the DRX
+
+        return {
+            "slope": (r_slope, g_slope, b_slope),
+            "offset": (r_offset, g_offset, b_offset),
+            "power": (r_power, g_power, b_power),
+            "saturation": saturation,
+        }
 
     def _compute_adaptive_cdl(self, profile: ClipColorProfile) -> Dict:
         """
