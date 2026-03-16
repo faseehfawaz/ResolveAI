@@ -2,8 +2,13 @@
 ResolveAI – Intelligent Auto-Grading Engine
 
 Analyzes ALL clips on the timeline, computes a baseline from the actual
-footage, and generates adaptive per-clip CDL corrections that produce
+footage, and generates adaptive per-clip corrections that produce
 professional-looking, visually consistent grades.
+
+Supports two grading modes:
+1. CDL-only: Adaptive per-clip CDL corrections (limited but reliable)
+2. DRX + CDL: Apply a professional DRX template for creative grade,
+   then use CDL for per-clip normalization (exposure/WB matching)
 
 The system is intelligent:
 - It understands each clip's characteristics (luminance, color, saturation)
@@ -18,6 +23,7 @@ Grading Styles:
 - "natural":  Minimal correction, preserve the original look
 """
 
+import os
 import numpy as np
 from dataclasses import dataclass, field
 from typing import Dict, List, Optional, Tuple
@@ -26,6 +32,7 @@ from color_engine.analyzer import ClipColorProfile, analyze_frames
 from color_engine.frame_grabber import grab_frames_from_clip, resize_for_analysis
 from color_engine.cdl_transform import format_cdl_for_resolve
 from resolve_bridge.timeline import get_all_clips
+from resolve_bridge.grading import apply_drx
 
 
 # ── Grading Style Parameters ────────────────────────────────
@@ -100,14 +107,20 @@ class AutoGrader:
     """
     Intelligent auto-grading engine.
 
-    Usage:
+    Usage (CDL-only):
         grader = AutoGrader(style="balanced")
-        grader.analyze_timeline()       # Phase 1: Analyze all clips
-        grades = grader.compute_grades() # Phase 2: Compute adaptive CDLs
-        grader.apply_grades(grades)      # Phase 3: Apply via SetCDL
+        grader.analyze_timeline()
+        grades = grader.compute_grades()
+        grader.apply_grades(grades)
+
+    Usage (DRX + CDL normalization):
+        grader = AutoGrader(style="balanced", drx_path="/path/to/grade.drx")
+        grader.analyze_timeline()
+        grades = grader.compute_grades()
+        grader.apply_drx_grade(grades)
     """
 
-    def __init__(self, style: str = "balanced"):
+    def __init__(self, style: str = "balanced", drx_path: str = None):
         if style not in STYLES:
             raise ValueError(f"Unknown style '{style}'. Choose from: {list(STYLES.keys())}")
         self.style = style
@@ -115,6 +128,7 @@ class AutoGrader:
         self.profiles: List[ClipColorProfile] = []
         self.clips = []
         self.baseline: Optional[TimelineBaseline] = None
+        self.drx_path = drx_path
 
     def analyze_timeline(self) -> TimelineBaseline:
         """
@@ -180,6 +194,8 @@ class AutoGrader:
 
         print(f"\n[ResolveAI] ═══ Phase 2: Computing Adaptive Grades ═══")
         print(f"[ResolveAI]   Style: {self.style}")
+        if self.drx_path:
+            print(f"[ResolveAI]   DRX template: {os.path.basename(self.drx_path)}")
 
         grades = []
         for i, (clip, profile) in enumerate(zip(self.clips, self.profiles)):
@@ -212,16 +228,16 @@ class AutoGrader:
                   f"sat={cdl['saturation']:.3f} "
                   f"dev={dev:.3f}")
 
-        # Phase 3: Consistency smoothing
+        # Consistency smoothing
         grades = self._smooth_grades(grades)
 
         return grades
 
     def apply_grades(self, grades: List[ClipGrade]) -> int:
         """
-        Phase 3: Apply the computed CDL grades to clips in Resolve.
+        Apply CDL-only grades to clips in Resolve.
         """
-        print(f"\n[ResolveAI] ═══ Phase 3: Applying Grades ═══")
+        print(f"\n[ResolveAI] ═══ Applying CDL Grades ═══")
 
         applied = 0
         for i, (clip, grade) in enumerate(zip(self.clips, grades)):
@@ -238,7 +254,52 @@ class AutoGrader:
             except Exception as e:
                 print(f"[ResolveAI]   ❌ [{i+1}/{len(self.clips)}] '{clip.name}' – {e}")
 
-        print(f"\n[ResolveAI] ✅ Done! Applied grades to {applied}/{len(self.clips)} clips.")
+        print(f"\n[ResolveAI] ✅ Done! Applied CDL grades to {applied}/{len(self.clips)} clips.")
+        return applied
+
+    def apply_drx_grade(self, grades: List[ClipGrade]) -> int:
+        """
+        Apply DRX template + CDL normalization to all clips.
+
+        This is the premium grading path:
+        1. Apply DRX template to each clip (professional creative grade)
+        2. Apply CDL normalization on top (per-clip exposure/WB matching)
+
+        The DRX gives us full access to Resolve's color tools (curves,
+        color wheels, HSL adjustments), while CDL handles per-clip
+        adaptation so all clips look consistent despite different
+        camera settings.
+        """
+        if not self.drx_path or not os.path.isfile(self.drx_path):
+            print(f"[ResolveAI] ❌ DRX file not found: {self.drx_path}")
+            return 0
+
+        print(f"\n[ResolveAI] ═══ Applying DRX + CDL Grades ═══")
+        print(f"[ResolveAI]   DRX template: {os.path.basename(self.drx_path)}")
+
+        applied = 0
+        for i, (clip, grade) in enumerate(zip(self.clips, grades)):
+            if grade is None:
+                continue
+
+            try:
+                # Step 1: Apply DRX template (creative grade)
+                drx_ok = apply_drx(clip.timeline_item, self.drx_path, grade_mode=0)
+
+                # Step 2: Apply CDL normalization on top (per-clip adaptation)
+                if drx_ok:
+                    cdl_ok = clip.timeline_item.SetCDL(grade.resolve_cdl)
+                    if cdl_ok:
+                        print(f"[ResolveAI]   ✅ [{i+1}/{len(self.clips)}] '{clip.name}' (DRX + CDL)")
+                    else:
+                        print(f"[ResolveAI]   ⚠️  [{i+1}/{len(self.clips)}] '{clip.name}' (DRX only, CDL failed)")
+                    applied += 1
+                else:
+                    print(f"[ResolveAI]   ❌ [{i+1}/{len(self.clips)}] '{clip.name}' – DRX failed")
+            except Exception as e:
+                print(f"[ResolveAI]   ❌ [{i+1}/{len(self.clips)}] '{clip.name}' – {e}")
+
+        print(f"\n[ResolveAI] ✅ Done! Applied DRX grades to {applied}/{len(self.clips)} clips.")
         return applied
 
     # ── Internal Methods ─────────────────────────────────────
