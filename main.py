@@ -418,6 +418,10 @@ def main():
         help="Color transfer method for legacy mode (default: reinhard)"
     )
     parser.add_argument(
+        "--drx", type=str, default=None,
+        help="Path to a .drx grade template file (applies professional grade from Resolve)"
+    )
+    parser.add_argument(
         "--intensity", type=float, default=1.0,
         help="Grade intensity 0.0–1.0 (default: 1.0)"
     )
@@ -441,8 +445,19 @@ def main():
     if args.reset:
         from reset_grades import main as reset_main
         reset_main()
-        if not args.auto and not args.look:
+        if not args.auto and not args.look and not args.drx:
             sys.exit(0)
+
+    # Auto-find DRX if --drx given without path
+    drx_path = args.drx
+    if drx_path == "auto" or (args.auto and drx_path is None):
+        # Auto-search for DRX files in samplestills/
+        stills_dir = os.path.join(PROJECT_ROOT, "samplestills")
+        if os.path.isdir(stills_dir):
+            drx_files = [f for f in os.listdir(stills_dir) if f.endswith(".drx")]
+            if drx_files:
+                drx_path = os.path.join(stills_dir, drx_files[0])
+                print(f"[ResolveAI] Found DRX template: {drx_files[0]}")
 
     # Auto mode – intelligent grading
     if args.auto:
@@ -451,8 +466,8 @@ def main():
             result = _engine.auto_grade_to_look(args.look, args.method, args.intensity)
             print(f"\n[ResolveAI] Auto-graded {result} clips with '{args.look}' look. Done.")
         else:
-            # NEW: Intelligent auto-grading
-            grader = AutoGrader(style=args.style)
+            # Intelligent auto-grading with optional DRX template
+            grader = AutoGrader(style=args.style, drx_path=drx_path)
 
             # Phase 1: Analyze
             grader.analyze_timeline()
@@ -461,7 +476,10 @@ def main():
             grades = grader.compute_grades()
 
             # Phase 3: Apply
-            grader.apply_grades(grades)
+            if drx_path and os.path.isfile(drx_path):
+                grader.apply_drx_grade(grades)
+            else:
+                grader.apply_grades(grades)
 
         sys.exit(0)
 
