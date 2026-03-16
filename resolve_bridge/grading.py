@@ -147,6 +147,9 @@ def apply_drx(
     """
     Apply a saved grade from a .drx (DaVinci Resolve eXchange) file.
     
+    Uses the NodeGraph.ApplyGradeFromDRX() API which is confirmed working
+    in Resolve Studio 20.3.
+    
     Args:
         timeline_item: The Resolve TimelineItem object.
         drx_path: Absolute path to the .drx file.
@@ -159,19 +162,24 @@ def apply_drx(
         print(f"[ResolveAI] DRX file not found: {drx_path}")
         return False
 
+    clip_name = timeline_item.GetName() or "unknown"
+
     try:
-        timeline = get_timeline()
-        if timeline is None:
+        # Get the NodeGraph object — this is the correct API path
+        ng = timeline_item.GetNodeGraph()
+        if ng is None:
+            print(f"[ResolveAI] Could not get NodeGraph for '{clip_name}'")
             return False
-        
-        # ApplyGradeFromDRX expects a list of timeline items
-        result = timeline.ApplyGradeFromDRX(drx_path, grade_mode, timeline_item)
+
+        result = ng.ApplyGradeFromDRX(drx_path, grade_mode)
         if result:
-            clip_name = timeline_item.GetName() or "unknown"
-            print(f"[ResolveAI] Applied DRX grade to '{clip_name}'")
-        return bool(result)
+            print(f"[ResolveAI] ✅ Applied DRX grade to '{clip_name}'")
+            return True
+        else:
+            print(f"[ResolveAI] ❌ ApplyGradeFromDRX returned False for '{clip_name}'")
+            return False
     except Exception as e:
-        print(f"[ResolveAI] Error applying DRX: {e}")
+        print(f"[ResolveAI] Error applying DRX to '{clip_name}': {e}")
         return False
 
 
