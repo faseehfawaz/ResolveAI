@@ -352,32 +352,32 @@ class AutoGrader:
         eps = 1e-6
 
         # ── 1. EXPOSURE + WHITE BALANCE via SLOPE ─────────────
-        # Full-strength correction: match each channel to baseline
+        # The DRX already adjusts exposure. The CDL only handles
+        # the RELATIVE differences between clips so they respond
+        # to the DRX uniformly. Use gentle 35% correction.
         r_ratio = bl.median_r_mean / max(profile.red.mean, eps)
         g_ratio = bl.median_g_mean / max(profile.green.mean, eps)
         b_ratio = bl.median_b_mean / max(profile.blue.mean, eps)
 
-        # Apply at 80% strength (strong but not full to avoid artifacts)
-        strength = 0.8
+        # Gentle strength — DRX handles the creative exposure
+        strength = 0.35
         r_slope = 1.0 + (r_ratio - 1.0) * strength
         g_slope = 1.0 + (g_ratio - 1.0) * strength
         b_slope = 1.0 + (b_ratio - 1.0) * strength
 
-        # Wider clamp for normalization (allows bigger corrections)
-        r_slope = max(0.70, min(1.40, r_slope))
-        g_slope = max(0.70, min(1.40, g_slope))
-        b_slope = max(0.70, min(1.40, b_slope))
+        # Moderate clamp — prevent overexposure
+        r_slope = max(0.85, min(1.15, r_slope))
+        g_slope = max(0.85, min(1.15, g_slope))
+        b_slope = max(0.85, min(1.15, b_slope))
 
         # ── 2. EXPOSURE FINE-TUNE via OFFSET ──────────────────
-        # If a clip is significantly brighter/darker than baseline,
-        # use offset to push shadows up or down
+        # Only for significantly different clips (>5% luminance diff)
         lum_diff = profile.luminance_mean - bl.median_luminance
 
-        if abs(lum_diff) > 0.03:  # Only correct meaningful differences
-            # Negative lum_diff = clip is darker → positive offset lifts shadows
-            # Scale aggressively: 0.1 lum difference → 0.02 offset
-            offset_correction = -lum_diff * 0.2
-            offset_correction = max(-0.04, min(0.04, offset_correction))
+        if abs(lum_diff) > 0.05:
+            # Gentle: 0.1 lum difference → 0.01 offset
+            offset_correction = -lum_diff * 0.1
+            offset_correction = max(-0.02, min(0.02, offset_correction))
         else:
             offset_correction = 0.0
 
