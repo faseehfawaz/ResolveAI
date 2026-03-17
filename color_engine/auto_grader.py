@@ -129,6 +129,7 @@ class AutoGrader:
         self.clips = []
         self.baseline: Optional[TimelineBaseline] = None
         self.drx_path = drx_path
+        self.reference_idx: int = -1  # Index of the reference clip
 
     def analyze_timeline(self) -> TimelineBaseline:
         """
@@ -205,9 +206,8 @@ class AutoGrader:
 
             # Choose CDL computation based on mode
             if self.drx_path:
-                # DRX mode: only normalization (exposure + WB matching)
-                # The DRX template handles all creative grading
-                cdl = self._compute_normalization_cdl(profile)
+                # DRX mode: reference-anchored pre-normalization
+                cdl = self._compute_reference_cdl(profile, i)
             else:
                 # CDL-only mode: full adaptive CDL (normalization + creative)
                 cdl = self._compute_adaptive_cdl(profile)
@@ -265,23 +265,29 @@ class AutoGrader:
 
     def apply_drx_grade(self, grades: List[ClipGrade]) -> int:
         """
-        Apply DRX template + CDL normalization to all clips.
+        Apply DRX template + reference-anchored CDL normalization.
 
-        This is the premium grading path:
-        1. Apply DRX template to each clip (professional creative grade)
-        2. Apply CDL normalization on top (per-clip exposure/WB matching)
+        This is the intelligent grading path:
+        1. Find the REFERENCE CLIP (the one the DRX was designed for)
+        2. For each clip: apply CDL that pre-normalizes its raw values
+           to match the reference clip's raw values
+        3. Apply the DRX template on top — now it "sees" uniform footage
 
-        The DRX gives us full access to Resolve's color tools (curves,
-        color wheels, HSL adjustments), while CDL handles per-clip
-        adaptation so all clips look consistent despite different
-        camera settings.
+        Result: every clip responds to the DRX identically to the
+        reference clip. No manual tuning needed.
         """
         if not self.drx_path or not os.path.isfile(self.drx_path):
             print(f"[ResolveAI] ❌ DRX file not found: {self.drx_path}")
             return 0
 
-        print(f"\n[ResolveAI] ═══ Applying DRX + CDL Grades ═══")
+        # Find the reference clip (lowest deviation = most representative)
+        self._find_reference_clip()
+        ref_name = self.clips[self.reference_idx].name if self.reference_idx >= 0 else "unknown"
+
+        print(f"\n[ResolveAI] ═══ Applying DRX + Intelligent Normalization ═══")
         print(f"[ResolveAI]   DRX template: {os.path.basename(self.drx_path)}")
+        print(f"[ResolveAI]   Reference clip: '{ref_name}' (DRX was designed for this)")
+        print(f"[ResolveAI]   Strategy: Pre-normalize each clip → then apply DRX")
 
         applied = 0
         for i, (clip, grade) in enumerate(zip(self.clips, grades)):
@@ -289,16 +295,18 @@ class AutoGrader:
                 continue
 
             try:
-                # Step 1: Apply DRX template (creative grade)
+                is_ref = (i == self.reference_idx)
+
+                # Step 1: Apply CDL pre-normalization
+                cdl_ok = clip.timeline_item.SetCDL(grade.resolve_cdl)
+
+                # Step 2: Apply DRX template on top
                 drx_ok = apply_drx(clip.timeline_item, self.drx_path, grade_mode=0)
 
-                # Step 2: Apply CDL normalization on top (per-clip adaptation)
                 if drx_ok:
-                    cdl_ok = clip.timeline_item.SetCDL(grade.resolve_cdl)
-                    if cdl_ok:
-                        print(f"[ResolveAI]   ✅ [{i+1}/{len(self.clips)}] '{clip.name}' (DRX + CDL)")
-                    else:
-                        print(f"[ResolveAI]   ⚠️  [{i+1}/{len(self.clips)}] '{clip.name}' (DRX only, CDL failed)")
+                    s = grade.cdl["slope"]
+                    tag = "REF" if is_ref else f"CDL({s[0]:.3f},{s[1]:.3f},{s[2]:.3f})"
+                    print(f"[ResolveAI]   ✅ [{i+1}/{len(self.clips)}] '{clip.name}' [{tag}]")
                     applied += 1
                 else:
                     print(f"[ResolveAI]   ❌ [{i+1}/{len(self.clips)}] '{clip.name}' – DRX failed")
@@ -307,6 +315,27 @@ class AutoGrader:
 
         print(f"\n[ResolveAI] ✅ Done! Applied DRX grades to {applied}/{len(self.clips)} clips.")
         return applied
+
+    def _find_reference_clip(self):
+        """
+        Find the reference clip — the one the DRX was most likely graded on.
+
+        The reference clip is the one closest to the timeline median (lowest
+        deviation score). The DRX was designed for this clip's characteristics,
+        so it should get identity CDL (no correction).
+        """
+        best_idx = 0
+        best_dev = float('inf')
+
+        for i, profile in enumerate(self.profiles):
+            if profile is None:
+                continue
+            dev = self._compute_deviation(profile)
+            if dev < best_dev:
+                best_dev = dev
+                best_idx = i
+
+        self.reference_idx = best_idx
 
     # ── Internal Methods ─────────────────────────────────────
 
@@ -331,80 +360,74 @@ class AutoGrader:
 
         return baseline
 
-    def _compute_normalization_cdl(self, profile: ClipColorProfile) -> Dict:
+    def _compute_reference_cdl(self, profile: ClipColorProfile, clip_idx: int) -> Dict:
         """
-        Compute NORMALIZATION-ONLY CDL for DRX mode.
+        Reference-anchored CDL for DRX mode.
 
-        When a DRX template provides the creative grade (curves, color wheels,
-        contrast), the CDL should ONLY handle per-clip differences:
+        Instead of guessing correction strength, we compute the EXACT CDL
+        needed to map this clip's raw values to the reference clip's raw
+        values. This way the DRX "sees" identical footage for every clip.
 
-        1. EXPOSURE MATCHING: Bring each clip's brightness to the baseline
-           via slope (highlights/gain) — more aggressive than creative mode
-        2. WHITE BALANCE MATCHING: Correct per-channel color casts via slope
-           at full strength (no dampening)
-        3. SHADOW LIFT: Compensate for clips that are too dark/bright
-           relative to what the DRX was designed for
+        The reference clip gets identity CDL (no correction).
+        Other clips get slope corrections proportional to their RGB
+        difference from the reference.
 
-        No contrast, no split-tone, no creative black point — the DRX
-        handles all of that.
+        This is self-correcting — no manual strength parameter to tune.
         """
-        bl = self.baseline
+        # Reference clip gets identity — no correction needed
+        if clip_idx == self.reference_idx:
+            return {
+                "slope": (1.0, 1.0, 1.0),
+                "offset": (0.0, 0.0, 0.0),
+                "power": (1.0, 1.0, 1.0),
+                "saturation": 1.0,
+            }
+
+        ref_profile = self.profiles[self.reference_idx]
+        if ref_profile is None:
+            return {
+                "slope": (1.0, 1.0, 1.0),
+                "offset": (0.0, 0.0, 0.0),
+                "power": (1.0, 1.0, 1.0),
+                "saturation": 1.0,
+            }
+
         eps = 1e-6
 
-        # ── 1. EXPOSURE + WHITE BALANCE via SLOPE ─────────────
-        # The DRX already adjusts exposure. The CDL only handles
-        # the RELATIVE differences between clips so they respond
-        # to the DRX uniformly. Use gentle 35% correction.
-        r_ratio = bl.median_r_mean / max(profile.red.mean, eps)
-        g_ratio = bl.median_g_mean / max(profile.green.mean, eps)
-        b_ratio = bl.median_b_mean / max(profile.blue.mean, eps)
+        # ── SLOPE: Map this clip's RGB to reference's RGB ─────
+        # slope = ref_value / clip_value
+        # This is the mathematically correct transformation.
+        r_slope = ref_profile.red.mean / max(profile.red.mean, eps)
+        g_slope = ref_profile.green.mean / max(profile.green.mean, eps)
+        b_slope = ref_profile.blue.mean / max(profile.blue.mean, eps)
 
-        # Gentle strength — DRX handles the creative exposure
-        strength = 0.35
-        r_slope = 1.0 + (r_ratio - 1.0) * strength
-        g_slope = 1.0 + (g_ratio - 1.0) * strength
-        b_slope = 1.0 + (b_ratio - 1.0) * strength
+        # Clamp to safe range (0.80 – 1.25)
+        # This prevents extreme corrections on very different clips
+        r_slope = max(0.80, min(1.25, r_slope))
+        g_slope = max(0.80, min(1.25, g_slope))
+        b_slope = max(0.80, min(1.25, b_slope))
 
-        # Moderate clamp — prevent overexposure
-        r_slope = max(0.85, min(1.15, r_slope))
-        g_slope = max(0.85, min(1.15, g_slope))
-        b_slope = max(0.85, min(1.15, b_slope))
-
-        # ── 2. EXPOSURE FINE-TUNE via OFFSET ──────────────────
-        # Only for significantly different clips (>5% luminance diff)
-        lum_diff = profile.luminance_mean - bl.median_luminance
-
-        if abs(lum_diff) > 0.05:
-            # Gentle: 0.1 lum difference → 0.01 offset
-            offset_correction = -lum_diff * 0.1
-            offset_correction = max(-0.02, min(0.02, offset_correction))
+        # ── OFFSET: Fine-tune shadows for large exposure gaps ─
+        lum_diff = profile.luminance_mean - ref_profile.luminance_mean
+        if abs(lum_diff) > 0.08:  # Only for big differences (>8%)
+            offset_val = -lum_diff * 0.05  # Very gentle
+            offset_val = max(-0.015, min(0.015, offset_val))
         else:
-            offset_correction = 0.0
+            offset_val = 0.0
 
-        r_offset = offset_correction
-        g_offset = offset_correction
-        b_offset = offset_correction
-
-        # ── 3. POWER = 1.0 (no contrast adjustment) ──────────
-        # The DRX template handles all contrast via its curves.
-        # We keep power at identity.
-        r_power = 1.0
-        g_power = 1.0
-        b_power = 1.0
-
-        # ── 4. SATURATION ─────────────────────────────────────
-        # Match saturation to baseline if significantly different
-        sat_ratio = bl.median_saturation / max(profile.saturation_mean, eps)
-        if abs(sat_ratio - 1.0) > 0.2:  # Only correct if >20% off
-            saturation = 1.0 + (sat_ratio - 1.0) * 0.5  # 50% correction
-            saturation = max(0.7, min(1.3, saturation))
+        # ── POWER: Identity (DRX handles contrast) ────────────
+        # ── SATURATION: Match to reference if very different ──
+        sat_ratio = ref_profile.saturation_mean / max(profile.saturation_mean, eps)
+        if abs(sat_ratio - 1.0) > 0.3:  # Only if >30% off
+            saturation = 1.0 + (sat_ratio - 1.0) * 0.3
+            saturation = max(0.75, min(1.25, saturation))
         else:
-            saturation = 1.0  # Leave saturation to the DRX
+            saturation = 1.0
 
         return {
             "slope": (r_slope, g_slope, b_slope),
-            "offset": (r_offset, g_offset, b_offset),
-            "power": (r_power, g_power, b_power),
+            "offset": (offset_val, offset_val, offset_val),
+            "power": (1.0, 1.0, 1.0),
             "saturation": saturation,
         }
 
